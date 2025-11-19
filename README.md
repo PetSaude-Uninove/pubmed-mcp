@@ -66,10 +66,38 @@ npx -y @smithery/cli@latest install @JackKuo666/pubmed-mcp-server --client cline
 
 ## 📊 Usage
 
-Start the MCP server:
+### STDIO Mode (Default)
+
+Start the MCP server in STDIO mode (for use with Claude Desktop and similar clients):
 
 ```bash
 python pubmed_server.py
+```
+
+### HTTP/SSE Mode (NEW!)
+
+Start the MCP server in HTTP mode with Server-Sent Events for web-based access:
+
+```bash
+# Using default host (127.0.0.1) and port (8000)
+python pubmed_server_http.py --transport sse
+
+# Custom host and port
+python pubmed_server_http.py --transport sse --host 0.0.0.0 --port 8080
+
+# STDIO mode (same as original)
+python pubmed_server_http.py --transport stdio
+```
+
+The HTTP server will be available at `http://127.0.0.1:8000/sse` by default.
+
+### Testing the HTTP Server
+
+You can test the HTTP server using the included example client:
+
+```bash
+# Make sure the server is running first
+python example_http_client.py
 ```
 ## Usage with Claude Desktop
 
@@ -159,6 +187,55 @@ Can you perform a deep analysis of the paper with PMID 12345678?
 - `pubmed_server.py`: The main MCP server implementation using FastMCP
 - `pubmed_web_search.py`: Contains the logic for searching PubMed and retrieving article information
 
+## 🌐 HTTP API Integration
+
+When running in HTTP/SSE mode, you can integrate the server with your applications using standard HTTP requests:
+
+### Using cURL
+
+```bash
+# Example: Search for articles
+curl -X POST http://127.0.0.1:8000/sse \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "search_pubmed_key_words",
+      "arguments": {
+        "key_words": "CRISPR",
+        "num_results": 5
+      }
+    }
+  }'
+```
+
+### Using Python
+
+See `example_http_client.py` for a complete Python client implementation.
+
+### Using JavaScript/TypeScript
+
+```javascript
+async function searchPubMed(keywords, numResults = 10) {
+  const response = await fetch('http://127.0.0.1:8000/sse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'search_pubmed_key_words',
+        arguments: { key_words: keywords, num_results: numResults }
+      }
+    })
+  });
+  return await response.json();
+}
+```
+
 ## 🔧 Dependencies
 
 - Python 3.10+
@@ -167,6 +244,8 @@ Can you perform a deep analysis of the paper with PMID 12345678?
 - logging
 - requests
 - beautifulsoup4
+- uvicorn (for HTTP mode)
+- starlette (for HTTP mode)
 
 ## 🤝 Contributing
 

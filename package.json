@@ -1,0 +1,12 @@
+{
+  "name": "pubmed-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.mjs",
+  "license": "MIT",
+  "dependencies": {
+    "undici": "^6.19.8",
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}
