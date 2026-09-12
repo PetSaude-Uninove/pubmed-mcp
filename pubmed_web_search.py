@@ -1,16 +1,31 @@
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 import os
+from urllib.parse import urlencode
 from collections import Counter
 import re
 import requests
 
-def generate_pubmed_search_url(term=None, title=None, author=None, journal=None, 
+PUBMED_EMAIL = os.getenv("PUBMED_EMAIL", "")
+PUBMED_API_KEY = os.getenv("PUBMED_API_KEY", "")
+
+
+def eutils_credenciais() -> str:
+    """Sufixo de query string com email e api_key do NCBI, quando definidos."""
+    params = {}
+    if PUBMED_EMAIL:
+        params["email"] = PUBMED_EMAIL
+    if PUBMED_API_KEY:
+        params["api_key"] = PUBMED_API_KEY
+    return ("&" + urlencode(params)) if params else ""
+
+
+def generate_pubmed_search_url(term=None, title=None, author=None, journal=None,
                                start_date=None, end_date=None, num_results=10):
     """根据用户输入的字段生成 PubMed 搜索 URL"""
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     query_parts = []
-    
+
     if term:
         query_parts.append(quote(term))
     if title:
@@ -21,7 +36,7 @@ def generate_pubmed_search_url(term=None, title=None, author=None, journal=None,
         query_parts.append(f"{quote(journal)}[Journal]")
     if start_date and end_date:
         query_parts.append(f"{start_date}:{end_date}[Date - Publication]")
-    
+
     query = " AND ".join(query_parts)
     params = {
         "db": "pubmed",
@@ -29,8 +44,8 @@ def generate_pubmed_search_url(term=None, title=None, author=None, journal=None,
         "retmax": num_results,
         "retmode": "xml"
     }
-    
-    return f"{base_url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}"
+
+    return f"{base_url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}" + eutils_credenciais()
 
 def search_pubmed(search_url):
     """从 PubMed 搜索结果中解析文章 ID"""
@@ -50,7 +65,7 @@ def search_pubmed(search_url):
 
 def get_pubmed_metadata(pmid):
     """使用 PubMed API 通过 PMID 获取文章的详细元数据"""
-    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml" + eutils_credenciais()
     response = requests.get(url)
     
     if response.status_code == 200:
@@ -96,7 +111,7 @@ def download_full_text_pdf(pmid):
     print(f"Attempting to access full text for PMID: {pmid}")
     
     # 首先，我们需要检查这篇文章是否有PMC ID
-    efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml"
+    efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pmid}&retmode=xml" + eutils_credenciais()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
