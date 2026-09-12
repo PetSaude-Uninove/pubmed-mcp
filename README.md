@@ -2,8 +2,6 @@
 
 # PubMed MCP Server
 
-[![smithery badge](https://smithery.ai/badge/@JackKuo666/pubmed-mcp-server)](https://smithery.ai/server/@JackKuo666/pubmed-mcp-server)
-
 🔍 Enable AI assistants to search, access, and analyze PubMed articles through a simple MCP interface.
 
 The PubMed MCP Server provides a bridge between AI assistants and PubMed's vast repository of biomedical literature through the Model Context Protocol (MCP). It allows AI models to search for scientific articles, access their metadata, and perform deep analysis in a programmatic way.
@@ -27,31 +25,6 @@ The PubMed MCP Server provides a bridge between AI assistants and PubMed's vast 
 - FastMCP library
 
 ### Installation
-### Installing via Smithery
-
-To install pubmed-mcp-server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@JackKuo666/pubmed-mcp-server):
-
-#### claude
-
-```bash
-npx -y @smithery/cli install @JackKuo666/pubmed-mcp-server --client claude
-```
-
-#### Cursor
-
-Paste the following into Settings → Cursor Settings → MCP → Add new server: 
-- Mac/Linux  
-```s
-npx -y @smithery/cli@latest run @JackKuo666/pubmed-mcp-server --client cursor --config "{}" 
-```
-#### Windsurf
-```sh
-npx -y @smithery/cli@latest install @JackKuo666/pubmed-mcp-server --client windsurf --config "{}"
-```
-### CLine
-```sh
-npx -y @smithery/cli@latest install @JackKuo666/pubmed-mcp-server --client cline --config "{}"
-```
 
 1. Clone the repository:
    ```
@@ -74,31 +47,44 @@ Start the MCP server in STDIO mode (for use with Claude Desktop and similar clie
 python pubmed_server.py
 ```
 
-### HTTP/SSE Mode (NEW!)
+## Produção (PET Saúde)
 
-Start the MCP server in HTTP mode with Server-Sent Events for web-based access:
+Em produção, o servidor roda em Streamable HTTP, no caminho `/mcp`, que é o
+transporte falado pelo cliente MCP do Open WebUI 0.6.x:
 
 ```bash
-# Using default host (127.0.0.1) and port (8000)
-python pubmed_server_http.py --transport sse
+# Usando HOST e PORT padrão (0.0.0.0:8000)
+python pubmed_server_http.py --transport streamable-http
 
-# Custom host and port
-python pubmed_server_http.py --transport sse --host 0.0.0.0 --port 8080
+# Sobrescrevendo host e porta
+python pubmed_server_http.py --transport streamable-http --host 0.0.0.0 --port 8080
 
-# STDIO mode (same as original)
+# Modo STDIO (uso local)
 python pubmed_server_http.py --transport stdio
 ```
 
-The HTTP server will be available at `http://127.0.0.1:8000/sse` by default.
+O servidor expõe:
+- `POST/GET http://<host>:8000/mcp`: endpoint Streamable HTTP (stateless).
+- `GET http://<host>:8000/health`: healthcheck, retorna `{"status": "ok"}`.
 
-### Testing the HTTP Server
+Variáveis de ambiente:
+- `HOST` e `PORT`: endereço e porta do servidor (padrão `0.0.0.0` e `8000`).
+- `PUBMED_EMAIL` e `PUBMED_API_KEY`: opcionais. Quando definidas, são enviadas
+  em toda chamada ao E-utilities do NCBI, que passa a permitir 10 requisições
+  por segundo em vez de 3.
 
-You can test the HTTP server using the included example client:
+Rodando a imagem publicada no GHCR:
 
 ```bash
-# Make sure the server is running first
-python example_http_client.py
+docker run -p 8000:8000 ghcr.io/petsaude-uninove/pubmed-mcp:v1.0.0
 ```
+
+Rodando os testes:
+
+```bash
+pytest -q
+```
+
 ## Usage with Claude Desktop
 
 Add this configuration to your `claude_desktop_config.json`:
@@ -187,53 +173,29 @@ Can you perform a deep analysis of the paper with PMID 12345678?
 - `pubmed_server.py`: The main MCP server implementation using FastMCP
 - `pubmed_web_search.py`: Contains the logic for searching PubMed and retrieving article information
 
-## 🌐 HTTP API Integration
+## 🌐 Integração via Streamable HTTP
 
-When running in HTTP/SSE mode, you can integrate the server with your applications using standard HTTP requests:
+Com o servidor rodando em `--transport streamable-http`, qualquer cliente MCP
+que fale Streamable HTTP (como o Open WebUI) pode se conectar em
+`http://<host>:8000/mcp`. Exemplo em Python com o SDK oficial:
 
-### Using cURL
+```python
+import anyio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 
-```bash
-# Example: Search for articles
-curl -X POST http://127.0.0.1:8000/sse \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "search_pubmed_key_words",
-      "arguments": {
-        "key_words": "CRISPR",
-        "num_results": 5
-      }
-    }
-  }'
-```
 
-### Using Python
+async def main():
+    async with streamablehttp_client("http://127.0.0.1:8000/mcp") as (r, w, _):
+        async with ClientSession(r, w) as sessao:
+            await sessao.initialize()
+            resultado = await sessao.call_tool(
+                "search_pubmed_key_words", {"key_words": "CRISPR", "num_results": 5}
+            )
+            print(resultado)
 
-See `example_http_client.py` for a complete Python client implementation.
 
-### Using JavaScript/TypeScript
-
-```javascript
-async function searchPubMed(keywords, numResults = 10) {
-  const response = await fetch('http://127.0.0.1:8000/sse', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: {
-        name: 'search_pubmed_key_words',
-        arguments: { key_words: keywords, num_results: numResults }
-      }
-    })
-  });
-  return await response.json();
-}
+anyio.run(main)
 ```
 
 ## 🔧 Dependencies

@@ -1,15 +1,50 @@
-from typing import Any, List, Dict, Optional, Union
-import asyncio
-import logging
+"""Servidor MCP do PubMed para o Open WebUI (PET Saúde).
+
+Transportes: `stdio` (uso local) e `streamable-http` (produção, em /mcp).
+O cliente MCP do Open WebUI 0.6.x fala Streamable HTTP.
+"""
 import argparse
+import logging
+import os
+from typing import Any, Dict, List, Optional, Union
+
 from mcp.server.fastmcp import FastMCP
-from pubmed_web_search import search_key_words, search_advanced, get_pubmed_metadata, download_full_text_pdf, deep_paper_analysis
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from pubmed_web_search import (deep_paper_analysis, download_full_text_pdf, get_pubmed_metadata,
+                               search_advanced, search_key_words)
+import asyncio
 
-# Initialize FastMCP server
-mcp = FastMCP("pubmed")
+logging.basicConfig(level=logging.INFO)
+
+mcp = FastMCP(
+    "pubmed",
+    host=os.getenv("HOST", "0.0.0.0"),
+    port=int(os.getenv("PORT", "8000")),
+    streamable_http_path="/mcp",
+    stateless_http=True,
+)
+
+# O StreamableHTTPSessionManager criado por streamable_http_app() só pode ser
+# executado uma vez por instância (mcp>=1.12). Reiniciamos a referência antes
+# de cada chamada para permitir subir e derrubar o app mais de uma vez no
+# mesmo processo (por exemplo, em testes que sobem o servidor repetidamente).
+_streamable_http_app_original = FastMCP.streamable_http_app
+
+
+def _streamable_http_app_reiniciavel(self: FastMCP):
+    self._session_manager = None
+    return _streamable_http_app_original(self)
+
+
+mcp.streamable_http_app = _streamable_http_app_reiniciavel.__get__(mcp, FastMCP)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
 
 @mcp.tool()
 async def search_pubmed_key_words(key_words: str, num_results: int = 10) -> List[Dict[str, Any]]:
@@ -131,151 +166,19 @@ async def deep_paper_analysis(pmid: Union[str, int]) -> Dict[str, str]:
     except Exception as e:
         return {"error": f"An error occurred while performing the deep paper analysis: {str(e)}"}
 
-def main():
-    """Main entry point with command-line argument support for different transport modes."""
-    import uvicorn
-    from fastapi import FastAPI
-    from fastapi.responses import StreamingResponse
-    import json
 
-    parser = argparse.ArgumentParser(description='PubMed MCP Server')
-    parser.add_argument(
-        '--transport',
-        choices=['stdio', 'sse'],
-        default='stdio',
-        help='Transport mode: stdio for standard input/output (default), sse for HTTP Server-Sent Events'
-    )
-    parser.add_argument(
-        '--host',
-        default='0.0.0.0',
-        help='Host to bind the HTTP server to (default: 0.0.0.0)'
-    )
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=8000,
-        help='Port to bind the HTTP server to (default: 8000)'
-    )
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="PubMed MCP Server")
+    parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    parser.add_argument("--host", default=None, help="sobrescreve HOST")
+    parser.add_argument("--port", type=int, default=None, help="sobrescreve PORT")
     args = parser.parse_args()
+    if args.host:
+        mcp.settings.host = args.host
+    if args.port:
+        mcp.settings.port = args.port
+    mcp.run(transport=args.transport)
 
-    if args.transport == 'sse':
-        logging.info(f"Starting PubMed MCP server in HTTP/SSE mode on {args.host}:{args.port}")
-
-        # Fallback HTTP JSON-RPC + simple SSE heartbeat at /sse
-        app = FastAPI(title="PubMed MCP Server (HTTP)")
-
-        @app.get("/sse")
-        async def sse():
-            async def generate():
-                yield "data: {\"ready\": true}\n\n"
-            return StreamingResponse(generate(), media_type="text/event-stream")
-
-        def tool_specs():
-            return [
-                {
-                    "name": "search_pubmed_key_words",
-                    "description": "Search PubMed articles using keywords.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "key_words": {"type": "string"},
-                            "num_results": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
-                        },
-                        "required": ["key_words"]
-                    }
-                },
-                {
-                    "name": "search_pubmed_advanced",
-                    "description": "Advanced PubMed search with filters.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "term": {"type": ["string", "null"]},
-                            "title": {"type": ["string", "null"]},
-                            "author": {"type": ["string", "null"]},
-                            "journal": {"type": ["string", "null"]},
-                            "start_date": {"type": ["string", "null"]},
-                            "end_date": {"type": ["string", "null"]},
-                            "num_results": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}
-                        }
-                    }
-                },
-                {
-                    "name": "get_pubmed_article_metadata",
-                    "description": "Get article metadata by PMID.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"pmid": {"type": ["string", "integer"]}},
-                        "required": ["pmid"]
-                    }
-                },
-                {
-                    "name": "download_pubmed_pdf",
-                    "description": "Attempt to download full-text PDF by PMID.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {"pmid": {"type": ["string", "integer"]}},
-                        "required": ["pmid"]
-                    }
-                }
-            ]
-
-        @app.post("/sse")
-        async def rpc(payload: Dict[str, Any]):
-            """Minimal JSON-RPC interface compatible with MCP clients expecting tools/list and tools/call."""
-            try:
-                method = payload.get("method")
-                req_id = payload.get("id", None)
-                params = payload.get("params", {})
-
-                if method in ("tools/list", "tools.list", "list_tools"):
-                    return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tool_specs()}}
-
-                if method in ("tools/call", "tools.call", "call_tool"):
-                    name = params.get("name")
-                    arguments = params.get("arguments", {})
-
-                    if name == "search_pubmed_key_words":
-                        res = await search_pubmed_key_words(**arguments)
-                        return {"jsonrpc": "2.0", "id": req_id, "result": {"content": res}}
-                    if name == "search_pubmed_advanced":
-                        res = await search_pubmed_advanced(**arguments)
-                        return {"jsonrpc": "2.0", "id": req_id, "result": {"content": res}}
-                    if name == "get_pubmed_article_metadata":
-                        res = await get_pubmed_article_metadata(**arguments)
-                        return {"jsonrpc": "2.0", "id": req_id, "result": {"content": res}}
-                    if name == "download_pubmed_pdf":
-                        res = await download_pubmed_pdf(**arguments)
-                        return {"jsonrpc": "2.0", "id": req_id, "result": {"content": res}}
-
-                    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Unknown tool: {name}"}}
-
-                if method in ("prompts/list", "prompts.list"):
-                    return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": [{"name": "deep_paper_analysis"}]}}
-
-                if method in ("prompts/call", "prompts.call"):
-                    arguments = params.get("arguments", {})
-                    pmid = arguments.get("pmid")
-                    res = await deep_paper_analysis(pmid)
-                    return {"jsonrpc": "2.0", "id": req_id, "result": {"content": res}}
-
-                return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
-            except Exception as e:
-                logging.exception("RPC error")
-                return {"jsonrpc": "2.0", "id": payload.get("id"), "error": {"code": -32000, "message": str(e)}}
-
-        # Health endpoint remains
-        @app.get("/health")
-        async def health():
-            return {"status": "healthy", "service": "pubmed-mcp"}
-
-        # Serve app
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
-    else:
-        logging.info("Starting PubMed MCP server in STDIO mode")
-        # Run in STDIO mode (original behavior)
-        mcp.run(transport='stdio')
 
 if __name__ == "__main__":
     main()
