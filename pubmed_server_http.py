@@ -4,6 +4,7 @@ Transportes: `stdio` (uso local) e `streamable-http` (produção, em /mcp).
 O cliente MCP do Open WebUI 0.6.x fala Streamable HTTP.
 """
 import argparse
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional, Union
@@ -14,7 +15,6 @@ from starlette.responses import JSONResponse
 
 from pubmed_web_search import (deep_paper_analysis, download_full_text_pdf, get_pubmed_metadata,
                                search_advanced, search_key_words)
-import asyncio
 
 logging.basicConfig(level=logging.INFO)
 
@@ -25,20 +25,6 @@ mcp = FastMCP(
     streamable_http_path="/mcp",
     stateless_http=True,
 )
-
-# O StreamableHTTPSessionManager criado por streamable_http_app() só pode ser
-# executado uma vez por instância (mcp>=1.12). Reiniciamos a referência antes
-# de cada chamada para permitir subir e derrubar o app mais de uma vez no
-# mesmo processo (por exemplo, em testes que sobem o servidor repetidamente).
-_streamable_http_app_original = FastMCP.streamable_http_app
-
-
-def _streamable_http_app_reiniciavel(self: FastMCP):
-    self._session_manager = None
-    return _streamable_http_app_original(self)
-
-
-mcp.streamable_http_app = _streamable_http_app_reiniciavel.__get__(mcp, FastMCP)
 
 
 @mcp.custom_route("/health", methods=["GET"])
